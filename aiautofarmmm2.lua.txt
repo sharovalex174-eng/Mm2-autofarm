@@ -1,0 +1,362 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+if CoreGui:FindFirstChild("MM2_MobileCandyUI_Final") then CoreGui["MM2_MobileCandyUI_Final"]:Destroy() end
+local ScreenGui = Instance.new("ScreenGui", CoreGui)
+ScreenGui.Name = "MM2_MobileCandyUI_Final"
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 200, 0, 140)
+MainFrame.Position = UDim2.new(0.1, 0, 0.3, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+local Title = Instance.new("TextButton", MainFrame)
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+Title.Text = "  mm2 farm by Ai"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 12
+Title.Font = Enum.Font.SourceSansBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.AutoButtonColor = false
+Title.Modal = true
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 8)
+local ToggleBtn = Instance.new("TextButton", MainFrame)
+ToggleBtn.Size = UDim2.new(1, -20, 0, 35)
+ToggleBtn.Position = UDim2.new(0, 10, 0, 40)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(75, 200, 75)
+ToggleBtn.Text = "FARM: ACTIVE"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 13
+ToggleBtn.Font = Enum.Font.SourceSansBold
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 6)
+local function createSlider(y, defaultText)
+	local txt = Instance.new("TextLabel", MainFrame)
+	txt.Size = UDim2.new(1, -20, 0, 15)
+	txt.Position = UDim2.new(0, 10, 0, y)
+	txt.Text = defaultText
+	txt.TextColor3 = Color3.fromRGB(200, 200, 200)
+	txt.TextSize = 11
+	txt.BackgroundTransparency = 1
+	txt.TextXAlignment = Enum.TextXAlignment.Left
+	local bg = Instance.new("TextButton", MainFrame)
+	bg.Size = UDim2.new(1, -20, 0, 8)
+	bg.Position = UDim2.new(0, 10, 0, y + 18)
+	bg.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+	bg.Text = ""
+	bg.AutoButtonColor = false
+	bg.Modal = true
+	Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 4)
+	local fill = Instance.new("Frame", bg)
+	fill.Size = UDim2.new(0.5, 0, 1, 0)
+	fill.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+	fill.BorderSizePixel = 0
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+	return txt, bg, fill
+end
+local SpeedText, SpeedBg, SpeedFill = createSlider(85, "Fly Speed: 24 studs/s")
+-- ФАРМ ВКЛЮЧЁН ПО УМОЛЧАНИЮ
+local isEnabled, farmSpeed, ignoredCandies, activeTween, isFlyingNow = true, 24, {}, nil, false
+local dangerCooldown = 0
+local roundCooldown = 0
+local lastMap = nil
+local platform = nil
+local PLATFORM_Y = -30
+local roleRevealStart = 0
+local function getCoinStats()
+	local currentCoins, maxCoins = 0, 40
+	local leaderstats = LocalPlayer:FindFirstChild("leaderstats")
+	local coinsValue = LocalPlayer:FindFirstChild("Coins") or (leaderstats and leaderstats:FindFirstChild("Coins"))
+	if coinsValue then currentCoins = coinsValue.Value end
+	local maxContainer = LocalPlayer:FindFirstChild("MaxCoins") or LocalPlayer:FindFirstChild("CoinBagSize") or (leaderstats and leaderstats:FindFirstChild("MaxCoins"))
+	if maxContainer then maxCoins = maxContainer.Value else
+		local playerData = LocalPlayer:FindFirstChild("PlayerData")
+		local eventBag = playerData and (playerData:FindFirstChild("EventBagSize") or playerData:FindFirstChild("BagSize"))
+		if eventBag then maxCoins = eventBag.Value else
+			local attributes = LocalPlayer:GetAttributes()
+			if attributes.MaxCoins then maxCoins = attributes.MaxCoins elseif attributes.BagSize then maxCoins = attributes.BagSize end
+		end
+	end
+	if maxCoins < 10 or maxCoins > 100 then maxCoins = 50 end
+	return currentCoins, maxCoins
+end
+local coinCache = {}
+local coinCacheTime = 0
+local function refreshCoinCache()
+	coinCache = {}
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and obj.Transparency < 1 then
+			local name = string.lower(obj.Name)
+			if string.match(name, "coin") or string.match(name, "candy") then
+				coinCache[#coinCache + 1] = obj
+			end
+		end
+	end
+	coinCacheTime = tick()
+end
+local function getMM2Candy(myRoot)
+	if tick() - coinCacheTime > 0.5 then refreshCoinCache() end
+	local best, bestDist = nil, 250
+	for i = 1, #coinCache do
+		local obj = coinCache[i]
+		if obj and obj.Parent and obj.Transparency < 1 and not ignoredCandies[obj] then
+			local d = (myRoot.Position - obj.Position).Magnitude
+			if d <= bestDist then best, bestDist = obj, d end
+		end
+	end
+	return best
+end
+local function isDangerNear(myRoot)
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer then
+			local char = plr.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if hrp and (myRoot.Position - hrp.Position).Magnitude <= 60 then
+				for _, tool in ipairs(char:GetChildren()) do
+					if tool:IsA("Tool") then
+						local n = string.lower(tool.Name)
+						if string.find(n, "knife") or string.find(n, "gun") or string.find(n, "murder") or string.find(n, "pistol") then
+							return true
+						end
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+local function isRoleRevealActive()
+	local obj = Workspace:FindFirstChild("RoleReveal")
+		or Workspace:FindFirstChild("RoleRevealGui")
+		or CoreGui:FindFirstChild("RoleReveal")
+		or CoreGui:FindFirstChild("RoleRevealGui")
+		or CoreGui:FindFirstChild("RoleGui")
+	if obj then
+		if roleRevealStart == 0 then roleRevealStart = tick() end
+		if tick() - roleRevealStart > 5 then
+			roleRevealStart = 0
+			return false
+		end
+		return true
+	end
+	roleRevealStart = 0
+	return false
+end
+ToggleBtn.MouseButton1Click:Connect(function()
+	isEnabled = not isEnabled
+	ToggleBtn.Text = isEnabled and "FARM: ACTIVE" or "FARM: OFF"
+	ToggleBtn.BackgroundColor3 = isEnabled and Color3.fromRGB(75, 200, 75) or Color3.fromRGB(255, 75, 75)
+	if not isEnabled then
+		ignoredCandies = {}
+		isFlyingNow = false
+		if activeTween then activeTween:Cancel() activeTween = nil end
+	end
+end)
+local activeSlider, sliderTouchObject = nil, nil
+local function updateSliders(input)
+	if activeSlider == "speed" then
+		local percentage = math.clamp((input.Position.X - SpeedBg.AbsolutePosition.X) / SpeedBg.AbsoluteSize.X, 0, 1)
+		SpeedFill.Size = UDim2.new(percentage, 0, 1, 0)
+		farmSpeed = math.round(16 + (percentage * 16))
+		SpeedText.Text = "Fly Speed: " .. tostring(farmSpeed) .. " studs/s"
+	end
+end
+SpeedBg.InputBegan:Connect(function(i) if (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) and not activeSlider then activeSlider = "speed" sliderTouchObject = i updateSliders(i) end end)
+UserInputService.InputChanged:Connect(function(i) if activeSlider and i == sliderTouchObject then updateSliders(i) end end)
+UserInputService.InputEnded:Connect(function(i) if i == sliderTouchObject then activeSlider, sliderTouchObject = nil, nil end end)
+local dragging, dragTouchObject, dragStart, startPos = false, nil, nil, nil
+Title.InputBegan:Connect(function(i) if (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) and not dragging then dragging = true dragTouchObject = i dragStart = i.Position startPos = MainFrame.Position end end)
+UserInputService.InputChanged:Connect(function(i) if dragging and i == dragTouchObject then local delta = i.Position - dragStart MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y) end end)
+UserInputService.InputEnded:Connect(function(i) if i == dragTouchObject then dragging, dragTouchObject = nil, nil end end)
+Workspace.DescendantRemoving:Connect(function(d) if ignoredCandies[d] then ignoredCandies[d] = nil end end)
+
+-- ANTI-AFK (по умолчанию включён)
+task.spawn(function()
+	while true do
+		task.wait(60)
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			local pos = hrp.Position
+			hrp.CFrame = CFrame.new(pos + Vector3.new(0.1, 0, 0))
+			task.wait(0.1)
+			hrp.CFrame = CFrame.new(pos)
+		end
+	end
+end)
+
+-- ANTI-FLING (по умолчанию включён): ОДИН РАЗ на персонажа
+local function disableFlingForPlayer(plr)
+	if plr == LocalPlayer then return end
+	local function onChar(char)
+		local hrp = char:WaitForChild("HumanoidRootPart", 5)
+		if hrp then hrp.CanCollide = false end
+	end
+	local char = plr.Character
+	if char then onChar(char) end
+	plr.CharacterAdded:Connect(onChar)
+end
+for _, plr in ipairs(Players:GetPlayers()) do disableFlingForPlayer(plr) end
+Players.PlayerAdded:Connect(disableFlingForPlayer)
+
+local function createPlatform()
+	if platform then platform:Destroy() platform = nil end
+	local p = Instance.new("Part")
+	p.Name = "FarmPlatform"
+	p.Size = Vector3.new(3, 1, 3)
+	p.Anchored = true
+	p.CanCollide = true
+	p.Transparency = 0.5
+	p.Material = Enum.Material.SmoothPlastic
+	p.Color = Color3.fromRGB(0, 150, 255)
+	p.Parent = Workspace
+	platform = p
+	return p
+end
+
+local function onRoundStart()
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if rootPart then
+		createPlatform()
+		if isEnabled then
+			roundCooldown = tick() + 2
+			isFlyingNow = false
+			if activeTween then activeTween:Cancel() activeTween = nil end
+		end
+	end
+end
+
+Workspace.ChildAdded:Connect(function(child)
+	if child.Name == "Normal" or child.Name == "Map" then
+		if lastMap ~= child then
+			lastMap = child
+			task.wait(0.2)
+			onRoundStart()
+		end
+	end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+	task.wait(0.5)
+	onRoundStart()
+end)
+
+RunService.Stepped:Connect(function()
+	if platform then
+		local character = LocalPlayer.Character
+		local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+		if rootPart then
+			platform.CFrame = CFrame.new(rootPart.Position.X, PLATFORM_Y, rootPart.Position.Z)
+		end
+	end
+end)
+
+local noclipParts = {}
+RunService.Stepped:Connect(function()
+	local character = LocalPlayer.Character
+	if not character then return end
+	if isEnabled and isFlyingNow then
+		if #noclipParts == 0 then
+			for _, part in ipairs(character:GetDescendants()) do
+				if part:IsA("BasePart") and part.CanCollide then noclipParts[#noclipParts + 1] = part end
+			end
+		end
+		for i = 1, #noclipParts do
+			local part = noclipParts[i]
+			if part and part.Parent then part.CanCollide = false end
+		end
+	elseif not isFlyingNow and #noclipParts > 0 then
+		for i = 1, #noclipParts do
+			local part = noclipParts[i]
+			if part and part.Parent then part.CanCollide = true end
+		end
+		noclipParts = {}
+	end
+end)
+
+RunService.Heartbeat:Connect(function()
+	if not isEnabled then return end
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not rootPart or not humanoid or humanoid.Health <= 0 then return end
+	if tick() < dangerCooldown then return end
+	if isDangerNear(rootPart) then
+		dangerCooldown = tick() + 1
+		isFlyingNow = false
+		if activeTween then activeTween:Cancel() activeTween = nil end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		if isEnabled then
+			local character = LocalPlayer.Character
+			local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if not rootPart or not humanoid or humanoid.Health <= 0 then
+				isFlyingNow = false
+				if activeTween then activeTween:Cancel() activeTween = nil end
+				task.wait(0.1)
+			elseif isRoleRevealActive() then
+				isFlyingNow = false
+				if activeTween then activeTween:Cancel() activeTween = nil end
+				task.wait(0.1)
+			elseif tick() < dangerCooldown or tick() < roundCooldown then
+				task.wait(0.05)
+			else
+				local currentCoins, maxCoins = getCoinStats()
+				if currentCoins >= maxCoins then
+					isEnabled, isFlyingNow = false, false
+					ToggleBtn.Text = "FARM: OFF"
+					ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 75)
+					ignoredCandies = {}
+					humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+					character:BreakJoints()
+				else
+					task.wait(2.5)
+					if not isEnabled then task.wait(0.05) else
+						local targetCandy = getMM2Candy(rootPart)
+						if targetCandy and targetCandy:IsDescendantOf(Workspace) and targetCandy.Transparency < 1 and isEnabled then
+							ignoredCandies[targetCandy] = true
+							isFlyingNow = true
+							noclipParts = {}
+							local approachCFrame = CFrame.new(targetCandy.Position + Vector3.new(0, 2.5, 0))
+							local distance = (rootPart.Position - approachCFrame.Position).Magnitude
+							local duration = math.max(distance / farmSpeed, 0.5)
+							activeTween = TweenService:Create(rootPart, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = approachCFrame})
+							activeTween:Play()
+							local isInterrupted = false
+							while activeTween and activeTween.PlaybackState == Enum.PlaybackState.Playing do
+								task.wait(0.03)
+								if not targetCandy or not targetCandy:IsDescendantOf(Workspace) or targetCandy.Transparency >= 1 or not isEnabled or tick() < dangerCooldown or tick() < roundCooldown or isRoleRevealActive() then activeTween:Cancel() isInterrupted = true break end
+							end
+							activeTween = nil
+							if not isInterrupted and isEnabled and targetCandy and targetCandy:IsDescendantOf(Workspace) then
+								local touchCFrame = CFrame.new(targetCandy.Position + Vector3.new(0, 0.5, 0))
+								local downTween = TweenService:Create(rootPart, TweenInfo.new(0.15, Enum.EasingStyle.Linear), {CFrame = touchCFrame})
+								downTween:Play()
+								task.wait(0.2)
+								if firetouchinterest and targetCandy:IsDescendantOf(Workspace) then
+									firetouchinterest(rootPart, targetCandy, 0)
+									task.wait(0.02)
+									firetouchinterest(rootPart, targetCandy, 1)
+								end
+							end
+						else
+							isFlyingNow = false
+							task.wait(0.05)
+						end
+					end
+				end
+			end
+		else
+			task.wait(0.1)
+		end
+	end
+end)
